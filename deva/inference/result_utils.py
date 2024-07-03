@@ -1,6 +1,7 @@
 import copy
 import math
 import os
+import warnings
 
 from dataclasses import dataclass
 from os import path
@@ -212,6 +213,31 @@ def save_result(queue: Queue):
             for seg in segments_info:
                 seg["mask"] = mask == seg["id"]
                 seg["area"] = int(seg["mask"].sum())
+
+                # Add bbox information
+                # x1, y1, x2, y2  with 0 <= x1 < x2 and 0 <= y1 < y2
+                try:
+                    xyxy = torchvision.ops.masks_to_boxes(seg["mask"].unsqueeze(0))
+                    xyxy = xyxy.numpy().squeeze()
+
+                    x, y = xyxy[::2], xyxy[1::2]
+
+                    seg["ul"] = (x[0], y[0])
+                    seg["ur"] = (x[0], y[1])
+                    seg["ll"] = (x[1], y[0])
+                    seg["lr"] = (x[1], y[1])
+
+                    seg["centroid"] = center_of_mass(seg["mask"].numpy())
+
+                    seg["area_bbox"] = abs(x[1] - x[0]) * abs(y[1] - y[0])
+
+                    seg["bbox_diag"] = math.dist(seg["ul"], seg["lr"])
+
+                    seg["width_height_ratio"] = abs(y[1] - y[0]) / abs(x[1] - x[0])
+                except RuntimeError as err:
+                    warnings.warn(f"{err}", UserWarning)
+                    continue
+
                 coco_mask = mask_util.encode(np.asfortranarray(seg["mask"].numpy()))
                 coco_mask["counts"] = coco_mask["counts"].decode("utf-8")
                 seg["rle_mask"] = coco_mask
@@ -229,26 +255,6 @@ def save_result(queue: Queue):
                 alpha = (out_mask == 0).astype(np.float32) * 0.5 + 0.5
                 alpha = alpha[:, :, None]
                 blend = (image_np * alpha + rgb_mask * (1 - alpha)).astype(np.uint8)
-
-                # Add bbox information
-                # x1, y1, x2, y2  with 0 <= x1 < x2 and 0 <= y1 < y2
-                xyxy = torchvision.ops.masks_to_boxes(seg["mask"].unsqueeze(0))
-                xyxy = xyxy.numpy().squeeze()
-
-                x, y = xyxy[::2], xyxy[1::2]
-
-                seg["ul"] = (x[0], y[0])
-                seg["ur"] = (x[0], y[1])
-                seg["ll"] = (x[1], y[0])
-                seg["lr"] = (x[1], y[1])
-
-                seg["centroid"] = center_of_mass(seg["mask"].numpy())
-
-                seg["area_bbox"] = abs(x[1] - x[0]) * abs(y[1] - y[0])
-
-                seg["bbox_diag"] = math.dist(seg["ul"], seg["lr"])
-
-                seg["width_height_ratio"] = abs(y[1] - y[0]) / abs(x[1] - x[0])
 
             # filter out zero-area segments
             segments_info = [s for s in segments_info if s["area"] > 0]
